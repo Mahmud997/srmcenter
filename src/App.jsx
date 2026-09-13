@@ -1,181 +1,48 @@
-import React, { useEffect, useMemo, useState } from "react";
-import {
-  addDoc, collection, doc, getDocs, limit, onSnapshot, orderBy,
-  query, serverTimestamp, setDoc, Timestamp, where
-} from "firebase/firestore";
-import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from "firebase/auth";
-import * as XLSX from "xlsx";
-import Papa from "papaparse";
-import { jsPDF } from "jspdf";
-import QRCode from "qrcode";
-import { auth, db, functions, firebaseConfigured } from "./firebase";
-import { httpsCallable } from "firebase/functions";
+import React, { useEffect, useMemo, useState } from 'react';
+import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
+import { httpsCallable } from 'firebase/functions';
+import { auth, db, functions } from './firebase';
+import './styles.css';
 
-const money = (n) => new Intl.NumberFormat("ru-RU").format(Number(n || 0)) + " ₸";
-const dateText = (v) => v?.toDate ? v.toDate().toLocaleString("ru-RU") : "—";
+const demoStudents = [
+  {id:'1',fullName:'Алиев Данияр',groupName:'Python PRO',parentName:'Алиев Марат',parentPhone:'+7 700 111 22 33',paymentStatus:'paid',monthlyFee:25000},
+  {id:'2',fullName:'Садыкова Аружан',groupName:'English A2',parentName:'Садыкова Гульнар',parentPhone:'+7 701 222 33 44',paymentStatus:'pending',monthlyFee:22000},
+  {id:'3',fullName:'Нурланов Алан',groupName:'Math 7',parentName:'Нурланова Айгуль',parentPhone:'+7 702 333 44 55',paymentStatus:'overdue',monthlyFee:20000},
+  {id:'4',fullName:'Ким София',groupName:'Python PRO',parentName:'Ким Елена',parentPhone:'+7 705 444 55 66',paymentStatus:'paid',monthlyFee:25000},
+  {id:'5',fullName:'Омаров Тимур',groupName:'English A2',parentName:'Омарова Дина',parentPhone:'+7 707 555 66 77',paymentStatus:'paid',monthlyFee:22000},
+];
+const demoGroups = [{id:'g1',name:'Python PRO',teacherName:'Ермеков Руслан',students:14,color:'violet'},{id:'g2',name:'English A2',teacherName:'Иванова Мария',students:18,color:'blue'},{id:'g3',name:'Math 7',teacherName:'Саинов Данияр',students:12,color:'orange'}];
+const demoLessons = [{id:'l1',groupName:'Python PRO',teacherName:'Ермеков Руслан',time:'09:00–10:30',topic:'Циклы и условия',status:'completed'},{id:'l2',groupName:'English A2',teacherName:'Иванова Мария',time:'11:00–12:30',topic:'Speaking practice',status:'live'},{id:'l3',groupName:'Math 7',teacherName:'Саинов Данияр',time:'15:00–16:30',topic:'Линейные уравнения',status:'upcoming'}];
 
-function exportExcel(rows, name="export.xlsx") {
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Данные");
-  XLSX.writeFile(wb, name);
-}
-function exportPDF(title, rows, name="report.pdf") {
-  const pdf = new jsPDF({orientation:"landscape"});
-  pdf.setFontSize(16); pdf.text(title, 12, 15);
-  pdf.setFontSize(9);
-  rows.slice(0, 35).forEach((r, i) => {
-    const line = Object.values(r).map(v => String(v ?? "")).join(" | ").slice(0, 170);
-    pdf.text(line, 12, 25 + i * 7);
-  });
-  pdf.save(name);
-}
+const nav = [
+  ['dashboard','Главная','⌂'],['students','Ученики','◉'],['groups','Группы','▦'],['schedule','Расписание','◷'],['payments','Оплаты','₸'],['attendance','Посещаемость','✓'],['finance','Финансы','▤'],['analytics','Аналитика','◌'],['reports','Отчёты','▤'],['staff','Сотрудники','♙'],['notifications','Уведомления','○']
+];
+function money(n=0){return new Intl.NumberFormat('ru-RU').format(Number(n)||0)+' ₸'}
+function Status({type}){const map={paid:['Оплачено','green'],pending:['Ожидается','yellow'],overdue:['Просрочено','red'],completed:['Завершён','green'],live:['Идёт сейчас','blue'],upcoming:['Предстоит','gray']}; const x=map[type]||[type||'—','gray']; return <span className={'pill '+x[1]}><i/> {x[0]}</span>}
 
-function Login({onUser}) {
-  const [email,setEmail]=useState(""); const [password,setPassword]=useState(""); const [error,setError]=useState("");
-  async function submit(e){
-    e.preventDefault(); setError("");
-    try { await signInWithEmailAndPassword(auth,email,password); }
-    catch(err){ setError(err.message || "Ошибка авторизации"); }
-  }
-  return <div className="login"><div className="login-card">
-    <div className="brand">SMART CENTER</div><h1>CRM / LMS</h1>
-    <p>Firebase · роли · посещаемость · финансы</p>
-    <form onSubmit={submit}>
-      <input placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} />
-      <input placeholder="Пароль" type="password" value={password} onChange={e=>setPassword(e.target.value)} />
-      <button>Войти</button>
-    </form>
-    {error && <div className="error">{error}</div>}
-    {!firebaseConfigured && <div className="warning">Заполните .env по примеру и пересоберите проект.</div>}
-  </div></div>
+export default function App(){
+ const [user,setUser]=useState(null),[role,setRole]=useState('director'),[page,setPage]=useState('dashboard'),[search,setSearch]=useState(''),[students,setStudents]=useState(demoStudents),[groups,setGroups]=useState(demoGroups),[lessons,setLessons]=useState(demoLessons),[payments,setPayments]=useState([]),[loading,setLoading]=useState(false),[login,setLogin]=useState({email:'',password:''}),[error,setError]=useState('');
+ useEffect(()=>onAuthStateChanged(auth,u=>setUser(u)),[]);
+ useEffect(()=>{ if(!user)return; const un=[]; try{un.push(onSnapshot(collection(db,'students'),s=>{if(!s.empty)setStudents(s.docs.map(d=>({id:d.id,...d.data()})))}));un.push(onSnapshot(collection(db,'groups'),s=>{if(!s.empty)setGroups(s.docs.map(d=>({id:d.id,...d.data()})))}));un.push(onSnapshot(query(collection(db,'lessons'),orderBy('scheduledStart','asc'),limit(50)),s=>{if(!s.empty)setLessons(s.docs.map(d=>({id:d.id,...d.data()})))}));un.push(onSnapshot(collection(db,'payments'),s=>setPayments(s.docs.map(d=>({id:d.id,...d.data()})))))}catch(e){} return ()=>un.forEach(x=>x());},[user]);
+ const filtered=useMemo(()=>students.filter(s=>(s.fullName||'').toLowerCase().includes(search.toLowerCase())||(s.groupName||'').toLowerCase().includes(search.toLowerCase())),[students,search]);
+ const stats={students:students.length,groups:groups.length,paid:students.filter(s=>s.paymentStatus==='paid').length,debt:students.filter(s=>s.paymentStatus==='overdue').reduce((a,s)=>a+(Number(s.monthlyFee)||0),0)};
+ const go=p=>setPage(p);
+ const doLogin=async e=>{e.preventDefault();setLoading(true);setError('');try{await signInWithEmailAndPassword(auth,login.email,login.password)}catch(x){setError(x.message||'Ошибка входа')}finally{setLoading(false)}};
+ if(!user)return <div className="login-page"><div className="login-brand"><div className="logo">SC</div><div><b>Smart Center</b><span>CRM / LMS</span></div></div><div className="login-card"><div className="eyebrow">SMART CENTER</div><h1>Добро пожаловать</h1><p>Управляйте учебным центром в одном пространстве.</p><form onSubmit={doLogin}><label>Email<input type="email" value={login.email} onChange={e=>setLogin({...login,email:e.target.value})} placeholder="director@center.kz" required/></label><label>Пароль<input type="password" value={login.password} onChange={e=>setLogin({...login,password:e.target.value})} placeholder="••••••••" required/></label>{error&&<div className="error">{error}</div>}<button className="primary full">{loading?'Вход…':'Войти в систему'}</button></form></div><div className="login-note">Firebase Auth · Firestore · защищённая роль доступа</div></div>;
+ return <div className="app"><aside className="sidebar"><div className="brand"><div className="logo">SC</div><div><b>Smart Center</b><small>CRM / LMS</small></div></div><div className="workspace"><span>Учебный центр</span><b>Главный филиал</b></div><nav>{nav.map(([id,label,ico])=><button key={id} className={page===id?'active':''} onClick={()=>go(id)}><span className="navico">{ico}</span>{label}{['notifications','reports'].includes(id)&&<em>3</em>}</button>)}</nav><div className="sidebar-bottom"><div className="user-mini"><div className="avatar">Д</div><div><b>Директор</b><small>{user.email}</small></div></div><button className="logout" onClick={()=>signOut(auth)}>Выйти</button></div></aside>
+ <main className="main"><header className="topbar"><div className="mobile-title">Smart Center</div><div className="search"><span>⌕</span><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Поиск ученика, группы…"/></div><div className="top-actions"><button className="icon-btn">?</button><button className="icon-btn">♧</button><button className="profile"><span className="avatar small">Д</span><span><b>Директор</b><small>Super Admin</small></span></button></div></header><div className="content"><PageTitle page={page} onAdd={()=>go(page==='students'?'students':page)} />{page==='dashboard'&&<Dashboard stats={stats} students={students} groups={groups} lessons={lessons} go={go}/>} {page==='students'&&<Students data={filtered} search={search}/>} {page==='groups'&&<Groups data={groups}/>} {page==='schedule'&&<Schedule data={lessons}/>} {page==='payments'&&<Payments students={students} payments={payments}/>} {page==='attendance'&&<Attendance lessons={lessons} students={students}/>} {page==='finance'&&<Finance students={students}/>} {page==='analytics'&&<Analytics students={students} groups={groups}/>} {page==='reports'&&<Reports lessons={lessons}/>} {page==='staff'&&<Staff/>} {page==='notifications'&&<Notifications/>}</div></main></div>
 }
-
-function Sidebar({tab,setTab,user}){
-  const items = [
-    ["dashboard","Обзор"],["groups","Группы"],["students","Ученики"],
-    ["lessons","Уроки"],["attendance","Посещаемость"],["finance","Бухгалтерия"],
-    ["reports","Отчёты"],["staff","Персонал"]
-  ];
-  return <aside><div className="logo">Smart<span>Center</span></div>
-    <div className="role">{user?.role || "user"}</div>
-    {items.map(([id,label])=><button className={tab===id?"nav active":"nav"} onClick={()=>setTab(id)} key={id}>{label}</button>)}
-    <button className="nav logout" onClick={()=>signOut(auth)}>Выйти</button>
-  </aside>
-}
-
-function Dashboard({students,groups,lessons,payments}){
-  const unpaid = students.filter(s=>s.paymentStatus==="unpaid").length;
-  const paid = students.filter(s=>s.paymentStatus==="paid").length;
-  return <main><h1>Обзор</h1><div className="cards">
-    <div><b>{students.length}</b><span>Учеников</span></div>
-    <div><b>{groups.length}</b><span>Групп</span></div>
-    <div><b>{paid}</b><span>Оплатили</span></div>
-    <div className="danger-card"><b>{unpaid}</b><span>Не оплатили</span></div>
-  </div>
-  <section className="panel"><h2>Контроль оплаты</h2><p>Зелёный — оплачено, жёлтый — срок приближается, красный — просрочено.</p>
-  <PaymentTable students={students}/></section></main>
-}
-
-function PaymentTable({students}){
-  return <div className="table-wrap"><table><thead><tr><th>Ученик</th><th>Группа</th><th>Родитель</th><th>Телефон</th><th>Срок</th><th>Статус</th><th>Связаться</th></tr></thead>
-  <tbody>{students.map(s=>{
-    const due = s.paymentDueAt?.toDate ? s.paymentDueAt.toDate() : null;
-    const days = due ? Math.ceil((due-Date.now())/86400000) : null;
-    const status = s.paymentStatus==="paid" ? "paid" : days!==null && days<0 ? "overdue" : days!==null && days<=3 ? "soon" : "unpaid";
-    return <tr key={s.id}><td>{s.fullName}</td><td>{s.groupName||"—"}</td><td>{s.parentName||"—"}</td><td>{s.parentPhone||"—"}</td><td>{due?due.toLocaleDateString("ru-RU"):"—"}</td>
-      <td><span className={"pill "+status}>{status==="paid"?"Оплачено":status==="soon"?"Скоро срок":status==="overdue"?"Просрочено":"Не оплачено"}</span></td>
-      <td>{s.parentPhone && <a className="call" href={"tel:"+s.parentPhone}>Позвонить</a>}</td></tr>
-  })}</tbody></table></div>
-}
-
-function Students({students,onImport}){
-  const [file,setFile]=useState(null);
-  function parseFile(f){
-    setFile(f);
-    const reader=new FileReader();
-    reader.onload=e=>{
-      const data=e.target.result;
-      let rows=[];
-      if(f.name.toLowerCase().endsWith(".csv")) rows=Papa.parse(data,{header:true,skipEmptyLines:true}).data;
-      else rows=XLSX.utils.sheet_to_json(XLSX.read(data,{type:"array"}).Sheets[XLSX.read(data,{type:"array"}).SheetNames[0]]);
-      onImport(rows);
-    };
-    if(f.name.toLowerCase().endsWith(".csv")) reader.readAsText(f); else reader.readAsArrayBuffer(f);
-  }
-  const exportTemplate=()=>exportExcel([{fullName:"Иванов Иван",phone:"+77000000000",groupName:"Group A",parentName:"Иванова Анна",parentPhone:"+77000000001",monthlyFee:30000,paymentStatus:"unpaid"}],"students-template.xlsx");
-  return <main><div className="head-row"><h1>Ученики</h1><button onClick={exportTemplate}>Скачать шаблон Excel</button></div>
-    <section className="panel"><h2>Импорт Excel / CSV</h2><input type="file" accept=".xlsx,.xls,.csv" onChange={e=>e.target.files[0]&&parseFile(e.target.files[0])}/>
-    {file&&<p>Загружен: {file.name}. Записи отправляются в Firestore после проверки.</p>}</section>
-    <section className="panel"><PaymentTable students={students}/></section></main>
-}
-
-function Finance({students,payments}){
-  const rows=payments.map(p=>({Дата:dateText(p.createdAt),Ученик:p.studentName,Сумма:p.amount,Метод:p.method,Статус:p.status}));
-  return <main><div className="head-row"><h1>Бухгалтерия</h1><div><button onClick={()=>exportExcel(rows)}>Excel</button><button onClick={()=>exportPDF("Финансовый отчёт",rows)}>PDF</button><button onClick={()=>window.print()}>Печать</button></div></div>
-    <div className="cards"><div><b>{money(payments.reduce((a,p)=>a+Number(p.amount||0),0))}</b><span>Поступления</span></div><div><b>{students.filter(s=>s.paymentStatus==="unpaid").length}</b><span>Должники</span></div></div>
-    <section className="panel"><h2>Платежи</h2><div className="table-wrap"><table><thead><tr><th>Дата</th><th>Ученик</th><th>Сумма</th><th>Метод</th><th>Статус</th></tr></thead><tbody>
-      {payments.map(p=><tr key={p.id}><td>{dateText(p.createdAt)}</td><td>{p.studentName}</td><td>{money(p.amount)}</td><td>{p.method||"—"}</td><td>{p.status||"paid"}</td></tr>)}</tbody></table></div></section>
-  </main>
-}
-
-function QRLesson(){
-  const [lessonId,setLessonId]=useState(""); const [qr,setQr]=useState(""); const [expires,setExpires]=useState(0); const [busy,setBusy]=useState(false);
-  async function create(){
-    setBusy(true);
-    try{
-      const fn=httpsCallable(functions,"createAttendanceQr");
-      const r=await fn({lessonId});
-      const token=r.data.token;
-      setQr(await QRCode.toDataURL(JSON.stringify({lessonId,token}),{width:320,margin:2}));
-      setExpires(Date.now()+Number(r.data.ttlMs||20000));
-    }catch(e){alert(e.message)}
-    finally{setBusy(false)}
-  }
-  useEffect(()=>{ if(!qr)return; const t=setInterval(()=>{if(Date.now()>expires)setQr("")},500); return()=>clearInterval(t)},[qr,expires]);
-  return <main><h1>QR-посещаемость</h1><section className="panel qr-panel"><input placeholder="ID урока" value={lessonId} onChange={e=>setLessonId(e.target.value)}/><button onClick={create} disabled={busy}>Создать QR на 20 секунд</button>
-  {qr&&<><img className="qr" src={qr}/><strong>QR короткоживущий. После истечения обновите код.</strong></>}</section></main>
-}
-
-function App(){
-  const [user,setUser]=useState(null); const [profile,setProfile]=useState(null); const [tab,setTab]=useState("dashboard");
-  const [students,setStudents]=useState([]),[groups,setGroups]=useState([]),[lessons,setLessons]=useState([]),[payments,setPayments]=useState([]);
-  useEffect(()=>onAuthStateChanged(auth,async u=>{
-    if(!u){setUser(null);return}
-    const snap=await getDocs(query(collection(db,"users"),where("__name__","==",u.uid),limit(1)));
-    setProfile(snap.empty?{role:"user"}:snap.docs[0].data()); setUser(u);
-  }),[]);
-  useEffect(()=>{if(!user)return;
-    const un1=onSnapshot(query(collection(db,"students"),limit(500)),s=>setStudents(s.docs.map(d=>({id:d.id,...d.data()}))));
-    const un2=onSnapshot(query(collection(db,"groups"),limit(200)),s=>setGroups(s.docs.map(d=>({id:d.id,...d.data()}))));
-    const un3=onSnapshot(query(collection(db,"lessons"),orderBy("scheduledStart","desc"),limit(200)),s=>setLessons(s.docs.map(d=>({id:d.id,...d.data()}))));
-    const un4=onSnapshot(query(collection(db,"payments"),orderBy("createdAt","desc"),limit(500)),s=>setPayments(s.docs.map(d=>({id:d.id,...d.data()}))));
-    return()=>{un1();un2();un3();un4()};
-  },[user]);
-  async function importStudents(rows){
-    for(const r of rows){
-      const fullName=r.fullName||r["ФИО"]||r.name; if(!fullName)continue;
-      await addDoc(collection(db,"students"),{
-        fullName, phone:r.phone||"", groupName:r.groupName||"",
-        parentName:r.parentName||"", parentPhone:r.parentPhone||"",
-        monthlyFee:Number(r.monthlyFee||0), paymentStatus:r.paymentStatus||"unpaid",
-        paymentDueAt:r.paymentDueAt?Timestamp.fromDate(new Date(r.paymentDueAt)):null,
-        createdAt:serverTimestamp(), active:true
-      });
-    }
-    alert("Импорт завершён");
-  }
-  if(!user)return <Login/>;
-  const data={students,groups,lessons,payments};
-  return <div className="app"><Sidebar tab={tab} setTab={setTab} user={profile}/>
-    {tab==="dashboard"&&<Dashboard {...data}/>}
-    {tab==="students"&&<Students students={students} onImport={importStudents}/>}
-    {tab==="finance"&&<Finance {...data}/>}
-    {tab==="attendance"&&<QRLesson/>}
-    {tab==="groups"&&<main><h1>Группы</h1><section className="panel"><p>CRUD групп подключается к коллекции <b>groups</b>. Доступ менеджера ограничен правилами.</p></section></main>}
-    {tab==="lessons"&&<main><h1>Уроки</h1><section className="panel"><p>Расписание и уроки хранятся в <b>lessons</b>. Учитель видит только назначенные ему уроки.</p></section></main>}
-    {tab==="reports"&&<main><h1>Отчёты</h1><section className="panel"><p>Системные напоминания создаются Cloud Function через 60 минут после окончания урока.</p></section></main>}
-    {tab==="staff"&&<main><h1>Персонал</h1><section className="panel"><p>Добавление пользователей выполняется через защищённую callable Function, а не напрямую из браузера.</p></section></main>}
-  </div>
-}
-export default App;
+function PageTitle({page,onAdd}){const t={dashboard:['Главная','Обзор учебного центра за сегодня'],students:['Ученики','Ученики, родители и платежный статус'],groups:['Группы','Учебные группы и преподаватели'],schedule:['Расписание','Уроки и ближайшие занятия'],payments:['Оплаты','Платежи и задолженности'],attendance:['Посещаемость','Контроль посещаемости по урокам'],finance:['Финансы','Доходы, оплаты и финансовый контроль'],analytics:['Аналитика','Показатели учебного центра'],reports:['Отчёты','Отчёты преподавателей и уроков'],staff:['Сотрудники','Команда и права доступа'],notifications:['Уведомления','Важные события и напоминания']}[page]||['Раздел',''];return <div className="page-head"><div><div className="crumb">SMART CENTER / {t[0].toUpperCase()}</div><h1>{t[0]}</h1><p>{t[1]}</p></div>{!['dashboard','analytics','notifications'].includes(page)&&<button className="primary" onClick={onAdd}>＋ Добавить</button>}</div>}
+function Dashboard({stats,students,groups,lessons,go}){return <><div className="stats-grid"><Stat label="Всего учеников" value={stats.students} change="+8.4%" icon="◉"/><Stat label="Активных групп" value={stats.groups} change="+2" icon="▦"/><Stat label="Оплачено" value={stats.paid} change="+12.1%" icon="✓"/><Stat label="Задолженность" value={money(stats.debt)} change="3 долга" icon="₸" danger/></div><div className="grid-2"><section className="card"><div className="card-head"><div><h2>Ближайшие уроки</h2><p>Сегодня, расписание центра</p></div><button className="text-btn" onClick={()=>go('schedule')}>Все уроки →</button></div><div className="lesson-list">{lessons.map(l=><div className="lesson" key={l.id}><div className="time">{l.time||'—'}<small>{l.status==='live'?'Сейчас':'Сегодня'}</small></div><div className="lesson-main"><b>{l.groupName||'Группа'}</b><span>{l.topic||'Урок'} · {l.teacherName||'Преподаватель'}</span></div><Status type={l.status}/></div>)}</div></section><section className="card"><div className="card-head"><div><h2>Контроль оплат</h2><p>Требуют внимания менеджера</p></div><button className="text-btn" onClick={()=>go('payments')}>Все оплаты →</button></div><div className="debt-total"><div><span>Ожидается к оплате</span><strong>{money(students.filter(s=>s.paymentStatus!=='paid').reduce((a,s)=>a+(Number(s.monthlyFee)||0),0))}</strong></div><div className="donut">{Math.round(stats.paid/Math.max(1,stats.students)*100)}%</div></div><div className="mini-table">{students.filter(s=>s.paymentStatus!=='paid').slice(0,4).map(s=><div key={s.id}><span><b>{s.fullName}</b><small>{s.groupName}</small></span><Status type={s.paymentStatus}/><strong>{money(s.monthlyFee)}</strong></div>)}</div></section></div><section className="card"><div className="card-head"><div><h2>Группы</h2><p>Заполняемость и преподаватели</p></div><button className="text-btn" onClick={()=>go('groups')}>Открыть группы →</button></div><div className="group-grid">{groups.map(g=><div className="group-card" key={g.id}><div className={'group-mark '+(g.color||'blue')}>SC</div><div><b>{g.name}</b><span>{g.teacherName}</span></div><strong>{g.students}<small> учеников</small></strong><div className="progress"><i style={{width:Math.min(100,g.students/20*100)+'%'}}/></div></div>)}</div></section></>}
+function Stat({label,value,change,icon,danger}){return <div className="stat card"><div className="stat-top"><span className={'stat-icon '+(danger?'danger':'')}>{icon}</span><span className={danger?'redtext':'up'}>{change}</span></div><strong>{value}</strong><span>{label}</span></div>}
+function Students({data}){return <section className="card"><div className="toolbar"><div><h2>Список учеников</h2><p>{data.length} записей · родители доступны для звонка</p></div><div className="tools"><button className="secondary">Импорт Excel</button><button className="secondary">Экспорт</button></div></div><div className="table-wrap"><table><thead><tr><th>Ученик</th><th>Группа</th><th>Родитель</th><th>Абонемент</th><th>Оплата</th><th></th></tr></thead><tbody>{data.map(s=><tr key={s.id}><td><div className="person"><span className="avatar">{(s.fullName||'?')[0]}</span><b>{s.fullName}</b></div></td><td>{s.groupName||'—'}</td><td><b>{s.parentName||'—'}</b><small className="muted">{s.parentPhone||''}</small></td><td>{money(s.monthlyFee)}</td><td><Status type={s.paymentStatus}/></td><td>{s.parentPhone&&<a className="call" href={'tel:'+s.parentPhone}>Позвонить</a>}</td></tr>)}</tbody></table></div></section>}
+function Groups({data}){return <div className="group-grid large">{data.map(g=><section className="card group-detail" key={g.id}><div className="group-detail-top"><div className={'group-mark '+(g.color||'blue')}>SC</div><div><h2>{g.name}</h2><p>{g.teacherName}</p></div><button className="more">•••</button></div><div className="group-metrics"><div><b>{g.students}</b><span>учеников</span></div><div><b>86%</b><span>посещаемость</span></div><div><b>92%</b><span>оплат</span></div></div><button className="secondary full">Открыть группу</button></section>)}</div>}
+function Schedule({data}){return <section className="card"><div className="calendar-head"><button>‹</button><b>14 сентября 2026</b><button>›</button><span></span><button className="secondary">Сегодня</button></div><div className="schedule-grid">{data.map(l=><div className={'schedule-item '+l.status} key={l.id}><small>{l.time}</small><b>{l.groupName}</b><span>{l.topic}</span><em>{l.teacherName}</em><Status type={l.status}/></div>)}</div></section>}
+function Payments({students}){return <section className="card"><div className="toolbar"><div><h2>Платежи</h2><p>Красный — просрочено · жёлтый — ожидается · зелёный — оплачено</p></div><div className="tools"><button className="secondary">Excel</button><button className="secondary">PDF</button><button className="secondary">Печать</button></div></div><div className="table-wrap"><table><thead><tr><th>Ученик</th><th>Группа</th><th>Сумма</th><th>Статус</th><th>Действие</th></tr></thead><tbody>{students.map(s=><tr key={s.id}><td><b>{s.fullName}</b></td><td>{s.groupName}</td><td><b>{money(s.monthlyFee)}</b></td><td><Status type={s.paymentStatus}/></td><td><button className="text-btn">Подробнее</button></td></tr>)}</tbody></table></div></section>}
+function Attendance({lessons}){return <div className="grid-2"><section className="card"><div className="card-head"><div><h2>QR-посещаемость</h2><p>QR → pending → подтверждение учителя</p></div><button className="primary">Создать QR</button></div><div className="qr-box"><div className="qr-fake">QR</div><b>Окно сканирования: 20 секунд</b><span>После сканирования запись попадёт в pending.</span></div></section><section className="card"><div className="card-head"><div><h2>Последние уроки</h2><p>Статус отчёта</p></div></div>{lessons.map(l=><div className="lesson" key={l.id}><div className="lesson-main"><b>{l.groupName}</b><span>{l.teacherName} · {l.topic}</span></div><Status type={l.status}/></div>)}</section></div>}
+function Finance({students}){const income=students.filter(s=>s.paymentStatus==='paid').reduce((a,s)=>a+(Number(s.monthlyFee)||0),0);return <><div className="stats-grid"><Stat label="Доход за период" value={money(income)} change="+14.2%" icon="₸"/><Stat label="Ожидается" value={money(students.filter(s=>s.paymentStatus!=='paid').reduce((a,s)=>a+(Number(s.monthlyFee)||0),0))} change="контроль" icon="◷" danger/><Stat label="Оплачено счетов" value={students.filter(s=>s.paymentStatus==='paid').length} change="стабильно" icon="✓"/><Stat label="Средний абонемент" value={money(students.reduce((a,s)=>a+(Number(s.monthlyFee)||0),0)/Math.max(1,students.length))} change="за месяц" icon="₸"/></div><section className="card"><div className="card-head"><div><h2>Финансовый отчёт</h2><p>День · месяц · произвольный период</p></div><div className="tools"><button className="secondary">Excel</button><button className="secondary">PDF</button><button className="primary">Печать</button></div></div><div className="chart"><div className="bars">{[52,68,55,80,64,92,74,88,61,95,78,86].map((x,i)=><div key={i}><i style={{height:x+'%'}}/><small>{i+1}</small></div>)}</div></div></section></>}
+function Analytics({students,groups}){return <><div className="grid-2"><section className="card"><div className="card-head"><div><h2>Посещаемость по группам</h2><p>Средний показатель за месяц</p></div></div>{groups.map((g,i)=><div className="analytic-row" key={g.id}><span>{g.name}</span><div className="line"><i style={{width:(92-i*5)+'%'}}/></div><b>{92-i*5}%</b></div>)}</section><section className="card"><div className="card-head"><div><h2>Активность</h2><p>По дням недели</p></div></div><div className="week"><span>Пн< i style={{height:'64%'}}/></span><span>Вт<i style={{height:'82%'}}/></span><span>Ср<i style={{height:'72%'}}/></span><span>Чт<i style={{height:'94%'}}/></span><span>Пт<i style={{height:'78%'}}/></span><span>Сб<i style={{height:'48%'}}/></span></div></section></div><section className="card"><h2>Ключевые показатели</h2><div className="kpi-grid"><div><b>{students.length}</b><span>активных учеников</span></div><div><b>88%</b><span>средняя посещаемость</span></div><div><b>94%</b><span>собираемость оплат</span></div><div><b>96%</b><span>отчёты вовремя</span></div></div></section></>}
+function Reports({lessons}){return <section className="card"><div className="toolbar"><div><h2>Отчёты преподавателей</h2><p>Контроль 60-минутного таймера</p></div><button className="secondary">Экспорт Excel</button></div><div className="table-wrap"><table><thead><tr><th>Урок</th><th>Преподаватель</th><th>Время</th><th>Статус</th><th>Действие</th></tr></thead><tbody>{lessons.map(l=><tr key={l.id}><td><b>{l.groupName}</b><small className="muted">{l.topic}</small></td><td>{l.teacherName}</td><td>{l.time}</td><td><Status type={l.status}/></td><td><button className="text-btn">Открыть отчёт</button></td></tr>)}</tbody></table></div></section>}
+function Staff(){return <section className="card"><div className="toolbar"><div><h2>Сотрудники</h2><p>Роли: директор, менеджер, учитель</p></div><button className="primary">＋ Новый сотрудник</button></div>{['Директор · Super Admin','Иванова Мария · Учитель','Ермеков Руслан · Учитель','Саинов Данияр · Учитель','Садыкова Айгуль · Менеджер'].map((x,i)=><div className="staff-row" key={x}><span className="avatar">{x[0]}</span><div><b>{x.split(' · ')[0]}</b><small>{x.split(' · ')[1]}</small></div><span className="role">{i===0?'SUPER ADMIN':x.includes('Менеджер')?'MANAGER':'TEACHER'}</span><button className="more">•••</button></div>)}</section>}
+function Notifications(){return <div className="notice-list">{['Просрочен отчёт: Python PRO · Ермеков Руслан','Оплата просрочена: Нурланов Алан','Завершён урок: English A2 · отчёт получен','Новый импорт учеников завершён'].map((x,i)=><section className="card notice" key={x}><span className={'notice-dot '+(i<2?'red':'green')}/><div><b>{x}</b><p>{i<2?'Требуется действие менеджера или директора.':'Событие обработано системой Smart Center.'}</p></div><small>сегодня</small></section>)}</div>}
