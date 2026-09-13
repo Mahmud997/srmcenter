@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function director() { return signedIn() && request.auth.token.role == 'director'; }
+    function manager() { return signedIn() && (request.auth.token.role == 'manager' || request.auth.token.role == 'director'); }
+
+    match /avatars/{uid}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn() && (request.auth.uid == uid || director());
+    }
+    match /documents/{uid}/{fileName} {
+      allow read: if signedIn() && (request.auth.uid == uid || manager());
+      allow write: if signedIn() && (request.auth.uid == uid || manager());
+    }
+    match /imports/{fileName} {
+      allow read, write: if director();
+    }
+  }
+}

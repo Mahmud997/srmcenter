@@ -1,0 +1,84 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function role(r) { return signedIn() && request.auth.token.role == r; }
+    function director() { return role('director'); }
+    function manager() { return role('manager') || director(); }
+    function teacher() { return role('teacher') || manager(); }
+
+    match /users/{uid} {
+      allow read: if director() || (signedIn() && request.auth.uid == uid) || manager();
+      allow create, delete: if director();
+      allow update: if director() || (signedIn() && request.auth.uid == uid);
+    }
+
+    match /groups/{groupId} {
+      allow read: if manager() || (signedIn() && resource.data.teacherIds.hasAny([request.auth.uid]));
+      allow create, update, delete: if manager();
+    }
+
+    match /groups/{groupId}/members/{studentId} {
+      allow read: if manager() || teacher();
+      allow write: if manager();
+    }
+
+    match /students/{studentId} {
+      allow read: if manager() || (signedIn() && resource.data.parentUid == request.auth.uid);
+      allow create, update: if manager();
+      allow delete: if director();
+    }
+
+    match /lessons/{lessonId} {
+      allow read: if manager() || (signedIn() && resource.data.teacherId == request.auth.uid);
+      allow create, update: if manager() || (signedIn() && request.resource.data.teacherId == request.auth.uid);
+      allow delete: if manager();
+    }
+
+    match /lessons/{lessonId}/attendance/{studentId} {
+      allow read: if manager() || (signedIn() && get(/databases/$(database)/documents/lessons/$(lessonId)).data.teacherId == request.auth.uid) || (signedIn() && studentId == request.auth.uid);
+      allow create: if signedIn() && (manager() || studentId == request.auth.uid);
+      allow update: if manager() || (signedIn() && get(/databases/$(database)/documents/lessons/$(lessonId)).data.teacherId == request.auth.uid);
+      allow delete: if manager();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if manager();
+      allow create, update: if manager();
+      allow delete: if director();
+    }
+
+    match /reports/{reportId} {
+      allow read: if manager() || (signedIn() && resource.data.teacherId == request.auth.uid);
+      allow create: if signedIn() && (manager() || request.resource.data.teacherId == request.auth.uid);
+      allow update: if manager() || (signedIn() && resource.data.teacherId == request.auth.uid);
+      allow delete: if director();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if manager() || (signedIn() && resource.data.recipientUid == request.auth.uid);
+      allow create: if manager();
+      allow update: if signedIn() && resource.data.recipientUid == request.auth.uid;
+      allow delete: if director();
+    }
+
+    match /qrTokens/{tokenId} {
+      allow read, write: if false;
+    }
+
+    match /imports/{importId} {
+      allow read: if manager();
+      allow write: if director();
+    }
+
+    match /payroll/{payrollId} {
+      allow read: if director();
+      allow write: if director();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if director();
+      allow write: if false;
+    }
+  }
+}
